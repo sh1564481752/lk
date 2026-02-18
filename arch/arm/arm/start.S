@@ -16,17 +16,25 @@
 
 .section ".text.boot"
 .globl _start
+
+/*
+ * _start: 程序入口点
+ * 
+ * 该函数是程序的起始执行点，负责初始化异常向量表。
+ * 每个异常向量指向相应的处理函数，用于处理不同类型的异常或中断。
+ */
 _start:
-    b   platform_reset
-    b   arm_undefined
-    b   arm_syscall
-    b   arm_prefetch_abort
-    b   arm_data_abort
-    b   arm_reserved
-    b   arm_irq
-    b   arm_fiq
+    b   platform_reset          /* 跳转到复位异常处理函数 */
+    b   arm_undefined           /* 跳转到未定义指令异常处理函数 */
+    b   arm_syscall             /* 跳转到系统调用异常处理函数 */
+    b   arm_prefetch_abort      /* 跳转到预取中止异常处理函数 */
+    b   arm_data_abort          /* 跳转到数据中止异常处理函数 */
+    b   arm_reserved            /* 跳转到保留异常处理函数 */
+    b   arm_irq                 /* 跳转到中断请求异常处理函数 */
+    b   arm_fiq                 /* 跳转到快速中断请求异常处理函数 */
+
 #if WITH_SMP
-    b   arm_reset
+    b   arm_reset               /* 如果启用SMP，跳转到SMP复位异常处理函数 */
 #endif
 
 .weak platform_reset

@@ -45,67 +45,70 @@ static void call_constructors(void) {
     }
 }
 
-// Main C entry point of the system, called from arch code on the boot cpu.
+/* Main C entry point of the system, called from arch code on the boot cpu. */
 void lk_main(ulong arg0, ulong arg1, ulong arg2, ulong arg3) {
-    // save the boot args
+    /* 保存启动参数 */
     lk_boot_args[0] = arg0;
     lk_boot_args[1] = arg1;
     lk_boot_args[2] = arg2;
     lk_boot_args[3] = arg3;
 
-    // get us into some sort of thread context
+    /* 进入某种线程上下文 */
     kernel_init_early();
 
-    // early arch stuff
+    /* 早期架构相关初始化 */
     lk_primary_cpu_init_level(LK_INIT_LEVEL_EARLIEST, LK_INIT_LEVEL_ARCH_EARLY - 1);
     arch_early_init();
 
-    // do any super early platform initialization
+    /* 超早期平台初始化 */
     lk_primary_cpu_init_level(LK_INIT_LEVEL_ARCH_EARLY, LK_INIT_LEVEL_PLATFORM_EARLY - 1);
     platform_early_init();
 
-    // do any super early target initialization
+    /* 超早期目标板初始化 */
     lk_primary_cpu_init_level(LK_INIT_LEVEL_PLATFORM_EARLY, LK_INIT_LEVEL_TARGET_EARLY - 1);
     target_early_init();
 
 #if WITH_SMP
+    /* 多核系统欢迎信息 */
     dprintf(INFO, "\nwelcome to lk/MP\n\n");
 #else
+    /* 单核系统欢迎信息 */
     dprintf(INFO, "\nwelcome to lk\n\n");
 #endif
+    /* 打印启动参数 */
     dprintf(INFO, "boot args 0x%lx 0x%lx 0x%lx 0x%lx\n",
             lk_boot_args[0], lk_boot_args[1], lk_boot_args[2], lk_boot_args[3]);
 
-    // bring up the kernel heap
+    /* 初始化内核堆 */
     lk_primary_cpu_init_level(LK_INIT_LEVEL_TARGET_EARLY, LK_INIT_LEVEL_HEAP - 1);
     dprintf(SPEW, "initializing heap\n");
     heap_init();
 
-    // deal with any static constructors
+    /* 处理静态构造函数 */
     dprintf(SPEW, "calling constructors\n");
     call_constructors();
 
-    // initialize the kernel
+    /* 初始化内核 */
     lk_primary_cpu_init_level(LK_INIT_LEVEL_HEAP, LK_INIT_LEVEL_KERNEL - 1);
     kernel_init();
 
     lk_primary_cpu_init_level(LK_INIT_LEVEL_KERNEL, LK_INIT_LEVEL_THREADING - 1);
 
-    // create a thread to complete system initialization
+    /* 创建完成系统初始化的线程 */
     dprintf(SPEW, "creating bootstrap completion thread\n");
     thread_t *t = thread_create("bootstrap2", &bootstrap2, NULL, DEFAULT_PRIORITY, DEFAULT_STACK_SIZE);
     thread_set_pinned_cpu(t, 0);
     thread_detach(t);
     thread_resume(t);
 
-    // become the idle thread and enable interrupts to start the scheduler
+    /* 成为idle线程并启用中断以启动调度器 */
     thread_become_idle();
 }
 
 static int bootstrap2(void *arg) {
     dprintf(SPEW, "top of bootstrap2()\n");
 
-    // If we have rust code, make sure it is linked in by forcing this function to be referenced.
+    /* If we have rust code, make sure it is linked in by forcing this function to be referenced. */
 #if HAVE_RUST
     extern void must_link_rust(void);
     must_link_rust();
@@ -114,12 +117,12 @@ static int bootstrap2(void *arg) {
     lk_primary_cpu_init_level(LK_INIT_LEVEL_THREADING, LK_INIT_LEVEL_ARCH - 1);
     arch_init();
 
-    // initialize the rest of the platform
+    /* initialize the rest of the platform */
     dprintf(SPEW, "initializing platform\n");
     lk_primary_cpu_init_level(LK_INIT_LEVEL_ARCH, LK_INIT_LEVEL_PLATFORM - 1);
     platform_init();
 
-    // initialize the target
+    /* initialize the target */
     dprintf(SPEW, "initializing target\n");
     lk_primary_cpu_init_level(LK_INIT_LEVEL_PLATFORM, LK_INIT_LEVEL_TARGET - 1);
     target_init();
