@@ -50,7 +50,7 @@ void arch_chain_load(void *entry, ulong arg0, ulong arg1, ulong arg2, ulong arg3
 void arch_disable_cache(uint flags) { PANIC_UNIMPLEMENTED; }
 void arch_enable_cache(uint flags) { PANIC_UNIMPLEMENTED; }
 
-void arch_clean_cache_range(addr_t start, size_t len) { PANIC_UNIMPLEMENTED; }
+void arch_clean_cache_range(addr_t start, size_t len) {  } // TODO: may need to implement this later
 void arch_clean_invalidate_cache_range(addr_t start, size_t len) { PANIC_UNIMPLEMENTED; }
 void arch_invalidate_cache_range(addr_t start, size_t len) { PANIC_UNIMPLEMENTED; }
 void arch_sync_cache_range(addr_t start, size_t len) { PANIC_UNIMPLEMENTED; }
@@ -58,10 +58,9 @@ void arch_sync_cache_range(addr_t start, size_t len) { PANIC_UNIMPLEMENTED; }
 /* atomics that may need to be implemented */
 // from https://gcc.gnu.org/wiki/Atomic/GCCMM/LIbrary
 unsigned int  __atomic_fetch_add_4  (volatile void *mem, unsigned int val, int model) {
-    spin_lock_saved_state_t state;
-    arch_interrupt_save(&state, 0);
+    arch_interrupt_saved_state_t state = arch_interrupt_save();
     unsigned int old = *(volatile unsigned int *)mem;
     *(volatile unsigned int *)mem = old + val;
-    arch_interrupt_restore(state, 0);
+    arch_interrupt_restore(state);
     return old;
 }

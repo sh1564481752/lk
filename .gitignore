@@ -3,11 +3,15 @@
 *.swp
 *~
 .cache
+.cache
 .clangd
-.vscode
 .mypy_cache
-blk.bin
+.rsync-filter
+.vscode
+TAGS
+blk*.bin*
 build-*
+buildall.log
 compile_commands.json
 cscope.*
 doit*
@@ -15,8 +19,10 @@ local.mk
 scripts/toolpaths.local
 t
 tagit
-TAGS
 tags
 toolchain
-.cache
+trace.txt
 vmlinux
+
+# place to put local stuff that isn't picked up by git
+local

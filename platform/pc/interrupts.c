@@ -74,8 +74,7 @@ status_t mask_interrupt(unsigned int vector) {
 
     LTRACEF("vector %#x\n", vector);
 
-    spin_lock_saved_state_t state;
-    spin_lock_irqsave(&lock, state);
+    arch_interrupt_saved_state_t state = spin_lock_irqsave(&lock);
 
     if (int_table[vector].flags.type == INTC_TYPE_PIC) {
         pic_enable(vector, false);
@@ -93,8 +92,7 @@ status_t unmask_interrupt(unsigned int vector) {
 
     LTRACEF("vector %#x\n", vector);
 
-    spin_lock_saved_state_t state;
-    spin_lock_irqsave(&lock, state);
+    arch_interrupt_saved_state_t state = spin_lock_irqsave(&lock);
 
     if (int_table[vector].flags.type == INTC_TYPE_PIC) {
         pic_enable(vector, true);
@@ -144,8 +142,7 @@ enum handler_return platform_irq(x86_iframe_t *frame) {
 static void register_int_handler_etc(unsigned int vector, int_handler handler, void *arg, bool edge, uint type) {
     ASSERT(vector < INT_VECTORS);
 
-    spin_lock_saved_state_t state;
-    spin_lock_irqsave(&lock, state);
+    arch_interrupt_saved_state_t state = spin_lock_irqsave(&lock);
 
     int_table[vector].arg = arg;
     int_table[vector].handler = handler;
@@ -168,11 +165,21 @@ void platform_mask_irqs(void) {
     pic_mask_interrupts();
 }
 
-status_t platform_pci_int_to_vector(unsigned int pci_int, unsigned int *vector) {
-    LTRACEF("pci_int %u\n", pci_int);
+status_t platform_pci_int_to_vector(unsigned int pci_int_pin, unsigned int pci_bus,
+        unsigned int pci_dev, unsigned int pci_func, unsigned int *vector) {
+    (void)pci_bus;
+    (void)pci_dev;
+    (void)pci_func;
+
+    LTRACEF("pci_int %u\n", pci_int_pin);
+
+    // NOTE: this whole translation is probably not what we want since it's passing in
+    // the INT pin from the PCI config which is 1..4 for INTA..INTD. Also the
+    // BIOS may have already configured the legacy interrupt and the INT_LINE
+    // field in the PCI config may already be set to the final value already.
 
     // pci interrupts are relative to PIC style irq #s so simply add INT_BASE to it
-    uint out_vector = pci_int + INT_BASE;
+    uint out_vector = pci_int_pin + INT_BASE;
     if (out_vector > INT_VECTORS) {
         return ERR_INVALID_ARGS;
     }
@@ -187,8 +194,7 @@ status_t platform_allocate_interrupts(size_t count, uint align_log2, bool msi, u
         PANIC_UNIMPLEMENTED;
     }
 
-    spin_lock_saved_state_t state;
-    spin_lock_irqsave(&lock, state);
+    arch_interrupt_saved_state_t state = spin_lock_irqsave(&lock);
 
     // find a free interrupt
     status_t err = ERR_NOT_FOUND;

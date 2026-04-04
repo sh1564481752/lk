@@ -36,6 +36,7 @@
 #include "boot_service_provider.h"
 #include "charset.h"
 #include "configuration_table.h"
+#include "debug_support.h"
 #include "defer.h"
 #include "memory_protocols.h"
 #include "pe.h"
@@ -43,8 +44,8 @@
 #include "runtime_service_provider.h"
 #include "switch_stack.h"
 #include "text_protocol.h"
+#include "uefi/types.h"
 #include "uefi_platform.h"
-#include "debug_support.h"
 #include "variable_mem.h"
 
 namespace {
@@ -52,12 +53,9 @@ namespace {
 constexpr auto EFI_SYSTEM_TABLE_SIGNATURE =
     static_cast<u64>(0x5453595320494249ULL);
 
-// ASCII "PE\x0\x0"
-
 using EfiEntry = int (*)(void *, struct EfiSystemTable *);
 
-template <typename T>
-void fill(T *data, size_t skip, uint8_t begin = 0) {
+template <typename T> void fill(T *data, size_t skip, uint8_t begin = 0) {
   auto ptr = reinterpret_cast<char *>(data);
   for (size_t i = 0; i < sizeof(T); i++) {
     if (i < skip) {
@@ -67,7 +65,7 @@ void fill(T *data, size_t skip, uint8_t begin = 0) {
   }
 }
 
-static char16_t firmwareVendor[] = u"Little Kernel";
+const char16_t firmwareVendor[] = u"Little Kernel";
 
 class ImageReader {
 public:
@@ -129,13 +127,13 @@ int load_sections_and_execute(ImageReader *reader,
       file_header->SizeOfOptionalHeader);
   if (sections <= 0) {
     printf("This PE file does not have any sections, unsupported.\n");
-    return -8;
+    return ERR_BAD_STATE;
   }
   for (size_t i = 0; i < sections; i++) {
     if (section_header[i].NumberOfRelocations != 0) {
-      printf("Section %s requires relocation, which is not supported.\n",
+      printf("Section %.8s requires relocation, which is not supported.\n",
              section_header[i].Name);
-      return -6;
+      return ERR_NOT_SUPPORTED;
     }
   }
   setup_heap();
@@ -143,21 +141,32 @@ int load_sections_and_execute(ImageReader *reader,
   const auto &last_section = section_header[sections - 1];
   const auto virtual_size = ROUNDUP(
       last_section.VirtualAddress + last_section.Misc.VirtualSize, PAGE_SIZE);
+  // For casting ImageBase to optional_header
+  // NOLINTBEGIN(performance-no-int-to-ptr)
   const auto image_base = reinterpret_cast<char *>(
       alloc_page(reinterpret_cast<void *>(optional_header->ImageBase),
                  virtual_size, 21 /* Kernel requires 2MB alignment */));
+  // NOLINTEND(performance-no-int-to-ptr)
   if (image_base == nullptr) {
-    return -7;
+    return ERR_NO_MEMORY;
   }
   memset(image_base, 0, virtual_size);
   DEFER { free_pages(image_base, virtual_size / PAGE_SIZE); };
-  reader->read(image_base, 0, section_header[0].PointerToRawData);
+  ssize_t bytes_read =
+      reader->read(image_base, 0, section_header[0].PointerToRawData);
+  if (bytes_read != static_cast<ssize_t>(section_header[0].PointerToRawData)) {
+    printf("Failed to read PE headers before first section\n");
+    return ERR_IO;
+  }
 
   for (size_t i = 0; i < sections; i++) {
     const auto &section = section_header[i];
-    reader->read(image_base + section.VirtualAddress,
-                section.PointerToRawData,
-                section.SizeOfRawData);
+    bytes_read = reader->read(image_base + section.VirtualAddress,
+                             section.PointerToRawData, section.SizeOfRawData);
+    if (bytes_read != section.SizeOfRawData) {
+      printf("Failed to read section %.8s %zd\n", section.Name, bytes_read);
+      return ERR_IO;
+    }
   }
   printf("Relocating image from 0x%llx to %p\n", optional_header->ImageBase,
          image_base);
@@ -175,18 +184,19 @@ int load_sections_and_execute(ImageReader *reader,
   fill(&boot_service, 0);
   setup_runtime_service_table(&runtime_service);
   setup_boot_service_table(&boot_service);
-  table.firmware_vendor = reinterpret_cast<uint16_t *>(firmwareVendor);
+  table.firmware_vendor = reinterpret_cast<const EfiChar16*>(firmwareVendor);
   table.runtime_services = &runtime_service;
   table.boot_services = &boot_service;
   table.header.signature = EFI_SYSTEM_TABLE_SIGNATURE;
   table.header.revision = 2 << 16;
   EfiSimpleTextOutputProtocol console_out = get_text_output_protocol();
   table.con_out = &console_out;
-  table.configuration_table =
+  auto configuration_table =
       reinterpret_cast<EfiConfigurationTable *>(alloc_page(PAGE_SIZE));
-  DEFER { free_pages(table.configuration_table, 1); };
-  memset(table.configuration_table, 0, PAGE_SIZE);
-  setup_configuration_table(&table);
+  table.configuration_table = configuration_table;
+  DEFER { free_pages(configuration_table, 1); };
+  memset(configuration_table, 0, PAGE_SIZE);
+  setup_configuration_table(&table, configuration_table);
   auto status = platform_setup_system_table(&table);
   if (status != EFI_STATUS_SUCCESS) {
     printf("platform_setup_system_table failed: %lu\n", status);
@@ -199,6 +209,7 @@ int load_sections_and_execute(ImageReader *reader,
   }
   char path[FS_MAX_PATH_LEN];
   reader->get_name(path, sizeof(path));
+  path[sizeof(path) - 1] = '\0';
   setup_debug_support(table, image_base, virtual_size, path);
 
   constexpr size_t kStackSize = 1 * 1024ul * 1024;
@@ -220,7 +231,7 @@ int load_sections_and_execute(ImageReader *reader,
 int cmd_uefi_load(int argc, const console_cmd_args *argv) {
   if (argc != 2) {
     printf("Usage: %s <name of block device to load from>\n", argv[0].str);
-    return 1;
+    return ERR_INVALID_ARGS;
   }
   if (argv[1].str[0] == '/') {
     load_pe_fs(argv[1].str);
@@ -233,15 +244,12 @@ int cmd_uefi_load(int argc, const console_cmd_args *argv) {
 int cmd_uefi_set_variable(int argc, const console_cmd_args *argv) {
   if (argc != 3) {
     printf("Usage: %s <variable> <data>\n", argv[0].str);
-    return 1;
+    return ERR_INVALID_ARGS;
   }
   EfiGuid guid = EFI_GLOBAL_VARIABLE_GUID;
   char16_t buffer[128];
   utf8_to_utf16(buffer, argv[1].str, sizeof(buffer) / sizeof(buffer[0]));
-  efi_set_variable(buffer,
-                   &guid,
-                   EFI_VARIABLE_BOOTSERVICE_ACCESS,
-                   argv[2].str,
+  efi_set_variable(buffer, &guid, EFI_VARIABLE_BOOTSERVICE_ACCESS, argv[2].str,
                    strlen(argv[2].str));
   return 0;
 }
@@ -257,44 +265,60 @@ STATIC_COMMAND("uefi_set_var", "set UEFI variable", &cmd_uefi_set_variable)
 STATIC_COMMAND("uefi_list_var", "list UEFI variable", &cmd_uefi_list_variable)
 STATIC_COMMAND_END(uefi);
 
-}  // namespace
+} // namespace
 
 int load_pe_file(ImageReader *reader) {
   constexpr size_t kBlocKSize = 4096;
 
   lk_time_t t = current_time();
   uint8_t *address = static_cast<uint8_t *>(malloc(kBlocKSize));
+  if (address == nullptr) {
+    printf("failed to allocate %zu bytes memory for PE header\n", kBlocKSize);
+    return ERR_NO_MEMORY;
+  }
+  DEFER { free(address); };
   ssize_t err = reader->read(reinterpret_cast<char *>(address), 0, kBlocKSize);
-  t = current_time() - t;
+  // Prevent divide by 0 errors
+  t = MAX(current_time() - t, 1);
+  if (err < 0) {
+    char name[128];
+    reader->get_name(name, sizeof(name));
+    name[sizeof(name) - 1] = '\0';
+    printf("error reading PE header from %s: %zd\n", name, err);
+    return ERR_IO;
+  }
   dprintf(INFO, "bio_read returns %d, took %u msecs (%d bytes/sec)\n", (int)err,
           (uint)t, (uint32_t)((uint64_t)err * 1000 / t));
 
   const auto dos_header = reinterpret_cast<const IMAGE_DOS_HEADER *>(address);
   if (!dos_header->CheckMagic()) {
     printf("DOS Magic check failed %x\n", dos_header->e_magic);
-    return -2;
+    return ERR_BAD_STATE;
   }
   if (dos_header->e_lfanew > kBlocKSize - sizeof(IMAGE_FILE_HEADER)) {
     printf(
         "Invalid PE header offset %d exceeds maximum read size of %zu - %zu\n",
         dos_header->e_lfanew, kBlocKSize, sizeof(IMAGE_FILE_HEADER));
-    return -3;
+    return ERR_BAD_STATE;
   }
   const auto pe_header = dos_header->GetPEHeader();
   const auto file_header = &pe_header->FileHeader;
   if (LE32(file_header->Signature) != kPEHeader) {
     printf("COFF Magic check failed %x\n", LE32(file_header->Signature));
-    return -4;
+    return ERR_BAD_STATE;
   }
-  printf("PE header machine type: %x\n",
-         static_cast<int>(file_header->Machine));
+  if (file_header->Machine != ArchitectureType::ARM64) {
+    printf("Unsupported PE header machine type: %x\n",
+           static_cast<int>(file_header->Machine));
+    return ERR_NOT_SUPPORTED;
+  }
   if (file_header->SizeOfOptionalHeader > sizeof(IMAGE_OPTIONAL_HEADER64) ||
       file_header->SizeOfOptionalHeader <
           sizeof(IMAGE_OPTIONAL_HEADER64) -
               sizeof(IMAGE_OPTIONAL_HEADER64::DataDirectory)) {
     printf("Unexpected size of optional header %d, expected %zu\n",
            file_header->SizeOfOptionalHeader, sizeof(IMAGE_OPTIONAL_HEADER64));
-    return -5;
+    return ERR_BAD_STATE;
   }
   const auto optional_header = &pe_header->OptionalHeader;
   if (optional_header->Subsystem != SubsystemType::EFIApplication) {

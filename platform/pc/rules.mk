@@ -9,6 +9,7 @@ CPU ?= modern
 MODULE_DEPS += lib/bio
 MODULE_DEPS += lib/cbuf
 MODULE_DEPS += lib/fixed_point
+MODULE_DEPS += dev/block/ide
 
 ifneq ($(CPU),legacy)
 MODULE_DEPS += dev/bus/pci/drivers
@@ -17,10 +18,9 @@ endif
 
 MODULE_SRCS += \
     $(LOCAL_DIR)/cmos.c \
-    $(LOCAL_DIR)/console.c \
+    $(LOCAL_DIR)/vga_console.c \
     $(LOCAL_DIR)/debug.c \
-    $(LOCAL_DIR)/display.c \
-    $(LOCAL_DIR)/ide.c \
+    $(LOCAL_DIR)/fb_console.c \
     $(LOCAL_DIR)/interrupts.c \
     $(LOCAL_DIR)/keyboard.c \
     $(LOCAL_DIR)/mp.c \
@@ -28,6 +28,7 @@ MODULE_SRCS += \
     $(LOCAL_DIR)/pic.c \
     $(LOCAL_DIR)/pit.c \
     $(LOCAL_DIR)/platform.c \
+    $(LOCAL_DIR)/power.c \
     $(LOCAL_DIR)/timer.c \
     $(LOCAL_DIR)/uart.c \
 

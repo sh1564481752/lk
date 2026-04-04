@@ -14,6 +14,7 @@
 #include <arch/x86/mmu.h>
 #include <arch/x86/descriptor.h>
 #include <arch/x86/feature.h>
+#include <arch/x86/mtrr.h>
 #include <arch/fpu.h>
 #include <arch/mmu.h>
 #include <kernel/vm.h>
@@ -54,7 +55,8 @@ uint8_t _kstack[PAGE_SIZE] __ALIGNED(sizeof(unsigned long));
 
 /* save a pointer to the multiboot information coming in from whoever called us */
 /* make sure it lives in .data to avoid it being wiped out by bss clearing */
-__SECTION(".data") uint32_t _multiboot_info;
+__SECTION(".data") uint32_t _multiboot1_info;
+__SECTION(".data") uint32_t _multiboot2_info;
 
 /* main tss */
 static tss_t system_tss __ALIGNED(16);
@@ -84,6 +86,7 @@ void x86_early_init_percpu(void) {
     asm("lidt _idtr");
 
     x86_mmu_early_init_percpu();
+    x86_mtrr_early_init_percpu();
 #if X86_WITH_FPU
     x86_fpu_early_init_percpu();
 #endif
@@ -95,6 +98,8 @@ void x86_early_init_percpu(void) {
 void arch_early_init(void) {
     x86_feature_early_init();
     x86_mmu_early_init();
+    x86_mtrr_early_init();
+
 #if X86_WITH_FPU
     x86_fpu_early_init();
 #endif
@@ -106,6 +111,7 @@ void arch_early_init(void) {
 void arch_init(void) {
     x86_feature_init();
     x86_mmu_init();
+    x86_mtrr_init();
 
 #if X86_WITH_FPU
     x86_fpu_init();

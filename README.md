@@ -26,7 +26,16 @@ For comprehensive documentation, see [Index](docs/index.md).
 - RISC-V 32 and 64bit bit in machine and supervisor mode
 - x86-32 and x86-64
 - Motorola 68000
-- Microblaze
 - MIPS
 - OpenRISC 1000
 - VAX (experimental)
+
+## Command Completion
+
+To enable tab completion for LK projects and common build targets in Bash or Zsh, source the following script in your shell session:
+
+```bash
+source scripts/completion.sh
+```
+
+You can also add this line to your `~/.bashrc` or `~/.zshrc` file to enable it automatically for all sessions.

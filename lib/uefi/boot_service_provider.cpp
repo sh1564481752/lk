@@ -54,8 +54,10 @@ EfiStatus handle_protocol(EfiHandle handle, const EfiGuid *protocol,
   if (guid_eq(protocol, LOADED_IMAGE_PROTOCOL_GUID)) {
     printf("handle_protocol(%p, LOADED_IMAGE_PROTOCOL_GUID, %p);\n", handle,
            intf);
-    const auto loaded_image = static_cast<EfiLoadedImageProtocol*>(
-        uefi_malloc(sizeof(EfiLoadedImageProtocol)));
+    const auto loaded_image = static_cast<EfiLoadedImageProtocol *>(uefi_malloc(sizeof(EfiLoadedImageProtocol)));
+    if (!loaded_image) {
+      return EFI_STATUS_OUT_OF_RESOURCES;
+    }
     *loaded_image = {};
     loaded_image->revision = EFI_LOADED_IMAGE_PROTOCOL_REVISION;
     loaded_image->parent_handle = nullptr;
@@ -70,7 +72,7 @@ EfiStatus handle_protocol(EfiHandle handle, const EfiGuid *protocol,
   } else if (guid_eq(protocol, LINUX_EFI_LOADED_IMAGE_FIXED_GUID)) {
     printf("handle_protocol(%p, LINUX_EFI_LOADED_IMAGE_FIXED_GUID, %p);\n",
            handle, intf);
-    return EFI_STATUS_SUCCESS;
+    return EFI_STATUS_UNSUPPORTED;
   } else {
     printf("handle_protocol(%p, %p, %p);\n", handle, protocol, intf);
   }
@@ -84,7 +86,7 @@ EfiStatus register_protocol_notify(const EfiGuid *protocol, EfiEvent event,
 }
 
 EfiStatus locate_handle(EfiLocateHandleSearchType search_type,
-                        const EfiGuid *protocol, void *search_key,
+                        const EfiGuid *protocol, const void *search_key,
                         size_t *buf_size, EfiHandle *buf) {
 
   printf("%s is unsupported\n", __FUNCTION__);
@@ -162,7 +164,7 @@ void restore_tpl(EfiTpl old_tpl) {
   printf("%s is called %zu\n", __FUNCTION__, old_tpl);
 }
 
-EfiStatus open_protocol(EfiHandle handle, const EfiGuid *protocol, void **intf,
+EfiStatus open_protocol(EfiHandle handle, const EfiGuid *protocol, const void **intf,
                         EfiHandle agent_handle, EfiHandle controller_handle,
                         EfiOpenProtocolAttributes attr) {
   if (guid_eq(protocol, LOADED_IMAGE_PROTOCOL_GUID)) {
@@ -221,6 +223,7 @@ EfiStatus open_protocol(EfiHandle handle, const EfiGuid *protocol, void **intf,
     config->revision = GBL_EFI_OS_CONFIGURATION_PROTOCOL_REVISION;
     config->fixup_bootconfig = fixup_bootconfig;
     config->select_device_trees = select_device_trees;
+    config->select_fit_configuration = select_fit_configuration;
     *intf = reinterpret_cast<void *>(config);
     return EFI_STATUS_SUCCESS;
   } else if (guid_eq(protocol, EFI_GBL_EFI_IMAGE_LOADING_PROTOCOL_GUID)) {
@@ -292,7 +295,7 @@ EfiStatus close_protocol(EfiHandle handle, const EfiGuid *protocol,
 }
 
 EfiStatus locate_handle_buffer(EfiLocateHandleSearchType search_type,
-                               const EfiGuid *protocol, void *search_key,
+                               const EfiGuid *protocol, const void *search_key,
                                size_t *num_handles, EfiHandle **buf) {
   if (guid_eq(protocol, EFI_BLOCK_IO_PROTOCOL_GUID)) {
     if (search_type == EFI_LOCATE_HANDLE_SEARCH_TYPE_BY_PROTOCOL) {

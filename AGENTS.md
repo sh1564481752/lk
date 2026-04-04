@@ -74,6 +74,9 @@ make spotless
 
 # Build all projects (for CI/verification)
 scripts/buildall -q -e -r  # quiet, errors-as-warnings, release builds
+
+Output will be written to buildall.log. To run the build with full output
+during the build, omit the -q flag.
 ```
 
 ### Running Tests
@@ -138,6 +141,12 @@ The do-qemu* scripts auto-build before launching QEMU.
 
 ### Common Patterns
 
+#### Error codes
+- Functions return `status_t` (int) with 0 for success, negative for errors
+- If a function needs to return data, it takes an output pointer and returns status: `status_t foo(int arg, int *out)`
+- If a function needs to return a positive value on success, it returns that directly and uses negative for errors: `int count = count_items(); if (count < 0) { /* handle error */ }`
+- Error codes are defined in `include/lk/err.h` (e.g. `ERR_NOT_FOUND`, `ERR_NO_MEMORY`, etc.) and are negative integers.
+
 #### Registering Console Commands
 Commands appear in shell when `app/shell` module is included:
 
@@ -188,7 +197,7 @@ Select heap implementation in project or via make:
 # In project.mk or command line
 LK_HEAP_IMPLEMENTATION ?= dlmalloc  # default
 # LK_HEAP_IMPLEMENTATION ?= cmpctmalloc  # compact allocator
-# LK_HEAP_IMPLEMENTATION ?= miniheap     # simple bump allocator
+# LK_HEAP_IMPLEMENTATION ?= miniheap     # simple very memory efficient but slow allocator
 
 # Controlled in lib/heap/rules.mk
 ```
@@ -245,6 +254,10 @@ Architecture/platform rules set defines via `GLOBAL_DEFINES +=`:
 - `lib/unittest` contains a unit test framework that other libraries can use to define tests.
   - Tests are auto-discovered and run with `ut all` on the command line shell, or automatically
     at boot time if `RUN_UNITTESTS_AT_BOOT` is defined at build time.
+- When a library adds its own unit tests, it should add a `tests/` subdirectory with test source
+  files and a `rules.mk` that defines a module for the tests. The module should have `MODULE_DEPS`
+  on the library being tested. MODULE_OPTIONS of the parent module should have 'tests' to ensure the
+  tests module is only built when testing is enabled.
 
 ## Key Files Reference
 

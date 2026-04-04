@@ -10,6 +10,7 @@
 #if M68K_MMU
 
 #include <arch/mmu.h>
+#include <arch/interrupts.h>
 #include <arch/spinlock.h>
 #include <assert.h>
 #include <kernel/vm.h>
@@ -672,8 +673,7 @@ status_t arch_mmu_query(arch_aspace_t *aspace, vaddr_t vaddr, paddr_t *paddr, ui
     LTRACEF("aspace %p, vaddr %#lx\n", aspace, vaddr);
 
     // Disable interrupts around the ptest instruction in case we get preempted
-    spin_lock_saved_state_t state;
-    arch_interrupt_save(&state, 0);
+    arch_interrupt_saved_state_t state = arch_interrupt_save();
 
     // Use the PTEST instruction to probe the translation
     uint32_t mmusr;
@@ -682,7 +682,7 @@ status_t arch_mmu_query(arch_aspace_t *aspace, vaddr_t vaddr, paddr_t *paddr, ui
         "movec %%mmusr, %0"
         : "=r"(mmusr) : "a"(vaddr) : "memory");
 
-    arch_interrupt_restore(state, 0);
+    arch_interrupt_restore(state);
 
     LTRACEF("vaddr %#x, mmusr %#x\n", (uint32_t)vaddr, mmusr);
     if ((mmusr & 0x1) == 0) {

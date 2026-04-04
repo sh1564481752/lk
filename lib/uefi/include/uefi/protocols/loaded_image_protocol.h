@@ -44,7 +44,7 @@ typedef struct {
   void* reserved;
   uint32_t load_options_size;
   void* load_options;
-  void* image_base;
+  const void* image_base;
   uint64_t image_size;
   EfiMemoryType image_code_type;
   EfiMemoryType image_data_type;
