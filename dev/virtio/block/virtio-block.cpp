@@ -106,6 +106,7 @@ struct virtio_block_txn {
 #define VIRTIO_BLK_F_FLUSH    (1<<9)
 #define VIRTIO_BLK_F_TOPOLOGY (1<<10)
 #define VIRTIO_BLK_F_CONFIG_WCE (1<<11)
+#define VIRTIO_BLK_F_MQ       (1<<12)
 #define VIRTIO_BLK_F_DISCARD  (1<<13)
 #define VIRTIO_BLK_F_WRITE_ZEROES (1<<14)
 #define VIRTIO_BLK_F_LIFETIME (1<<15)
@@ -145,6 +146,7 @@ struct virtio_block_dev {
 
     /* our negotiated guest features */
     uint32_t guest_features;
+    bool readonly;
 
     virtio_block_txn *txns;
 };
@@ -161,6 +163,7 @@ static void dump_feature_bits(const char *name, uint32_t feature) {
     if (feature & VIRTIO_BLK_F_FLUSH) printf(" FLUSH");
     if (feature & VIRTIO_BLK_F_TOPOLOGY) printf(" TOPOLOGY");
     if (feature & VIRTIO_BLK_F_CONFIG_WCE) printf(" CONFIG_WCE");
+    if (feature & VIRTIO_BLK_F_MQ) printf(" MQ");
     if (feature & VIRTIO_BLK_F_DISCARD) printf(" DISCARD");
     if (feature & VIRTIO_BLK_F_WRITE_ZEROES) printf(" WRITE_ZEROES");
     if (feature & VIRTIO_BLK_F_LIFETIME) printf(" LIFETIME");
@@ -184,8 +187,9 @@ status_t virtio_block_init(virtio_device *dev) {
     dev->bus()->virtio_reset_device();
 
     uint32_t host_features = dev->bus()->virtio_read_host_feature_word(0);
+    bdev->readonly = (host_features & VIRTIO_BLK_F_RO) != 0;
 
-    volatile const auto *config = (const virtio_blk_config *)dev->get_config_ptr();
+    volatile auto *config = (virtio_blk_config *)dev->get_config_ptr();
 
     LTRACEF("capacity %" PRIx64 "\n", config->capacity);
     LTRACEF("size_max %#x\n", config->size_max);
@@ -200,14 +204,18 @@ status_t virtio_block_init(virtio_device *dev) {
 
     /* keep the features we understand or can tolerate */
     bdev->guest_features &= (VIRTIO_BLK_F_SIZE_MAX |
+                             VIRTIO_BLK_F_RO |
+                             VIRTIO_BLK_F_FLUSH |
                              VIRTIO_BLK_F_BLK_SIZE |
                              VIRTIO_BLK_F_GEOMETRY |
                              VIRTIO_BLK_F_TOPOLOGY |
-                             VIRTIO_BLK_F_DISCARD |
-                             VIRTIO_BLK_F_WRITE_ZEROES);
+                             VIRTIO_BLK_F_CONFIG_WCE);
     dev->bus()->virtio_set_guest_features(0, bdev->guest_features);
 
-    /* TODO: handle a RO feature */
+    // If supported, prefer writeback mode for better throughput.
+    if (bdev->guest_features & VIRTIO_BLK_F_CONFIG_WCE) {
+        config->writeback = 1;
+    }
 
     /* allocate a virtio ring */
     dev->virtio_alloc_ring(0, VIRTIO_BLK_RING_LEN);
@@ -247,6 +255,12 @@ status_t virtio_block_init(virtio_device *dev) {
     /* dump feature bits */
     dump_feature_bits("host", host_features);
     dump_feature_bits("guest", bdev->guest_features);
+    if (bdev->readonly) {
+        printf("\tdevice mode: read-only\n");
+    }
+    if (host_features & VIRTIO_BLK_F_CONFIG_WCE) {
+        printf("\twriteback mode: %s\n", config->writeback ? "enabled" : "disabled");
+    }
     printf("\tsize_max %u seg_max %u\n", config->size_max, config->seg_max);
     if (host_features & VIRTIO_BLK_F_GEOMETRY) {
         printf("\tgeometry: cyl %u head %u sector %u\n", config->geometry.cylinders, config->geometry.heads, config->geometry.sectors);
@@ -439,13 +453,14 @@ static status_t virtio_block_do_txn(virtio_device *dev, void *buf,
     return NO_ERROR;
 }
 
+// TODO: handle partial block transfers
 static void sync_completion_cb(void *cookie, struct bdev *dev, ssize_t bytes) {
     DEBUG_ASSERT(cookie);
     event_t *event = (event_t *)cookie;
     event_signal(event, false);
 }
 
-ssize_t virtio_block_read_write(virtio_device *dev, void *buf,
+static ssize_t virtio_block_read_write(virtio_device *dev, void *buf,
                                 const off_t offset, const size_t len,
                                 const bool write) {
     struct virtio_block_txn *txn;
@@ -496,6 +511,10 @@ static status_t virtio_bdev_write_async(bdev *bdev, const void *buf,
     struct virtio_block_dev *dev =
         containerof(bdev, struct virtio_block_dev, bdev);
 
+    if (dev->readonly) {
+        return ERR_NOT_SUPPORTED;
+    }
+
     return virtio_block_do_txn(dev->dev, (void *)buf, offset, len, true,
                                callback, cookie, NULL);
 }
@@ -504,6 +523,10 @@ static ssize_t virtio_bdev_write_block(bdev *bdev, const void *buf, bnum_t block
     struct virtio_block_dev *dev = containerof(bdev, struct virtio_block_dev, bdev);
 
     LTRACEF("dev %p, buf %p, block 0x%x, count %u\n", bdev, buf, block, count);
+
+    if (dev->readonly) {
+        return ERR_NOT_SUPPORTED;
+    }
 
     ssize_t result = virtio_block_read_write(dev->dev, (void *)buf, (off_t)block * dev->bdev.block_size,
                      count * dev->bdev.block_size, true);

@@ -9,6 +9,15 @@
 
 .section .text.boot
 FUNCTION(_start)
+#if M68K_CPU == 68000 && PLATFORM_QEMU_VIRT_M68K
+    // QEMU's m68k emulation loads us at 0 which is where the vector table needs to be.
+    // Insert a NOP sled to fill the vector table space (256 entries × 4 bytes = 1024 bytes).
+    // This allows the vector table to be later copied to address 0 without overwriting code.
+.rept 256
+    nop
+    nop
+.endr
+#endif
     // load the first 4 args that were pushed on whatever stack we have
     // NOTE: assumes stack is pointing at at least readable memory
     movl    %sp@(4),%d4
@@ -60,6 +69,16 @@ bss_clear:
     bne     0b
 1:
 
+#if M68K_CPU == 68000
+    // Copy vector table to 0x0, no VBR here
+    lea %pc@(exc_vectors),%a0
+    move.l #0,%a1
+    move.w #255,%d0
+copy_vectab:
+    move.l %a0@+,%a1@+
+    dbra %d0,copy_vectab
+#endif
+
 #if M68K_MMU == 68040
 init_mmu_68040:
     // Set up DTTR0 and ITTR0 to map 0x00000000 - 0x3FFFFFFF (1GB) to 0x00000000
@@ -81,8 +100,7 @@ init_mmu_68040:
     lea    %pc@(_l1_tables),%a1   // get pointer to L1 tables
     addl   #0x00000003,%a1        // mark it valid
 .Ll0_loop:
-    movl   %a1,%a0@               // store it in the L0 table
-    addl   #4,%a0                 // advance to next L0 entry
+    movel  %a1,%a0@+              // store it in the L0 table and advance
     addl   #L1_PGTABLE_ENTRIES * 4,%a1 // advance to next L1 table
     subl   #1,%d0
     bne    .Ll0_loop
@@ -94,8 +112,7 @@ init_mmu_68040:
     addl   #0x00000003,%a1        // mark it valid
 
 .Ll1_loop:
-    movl   %a1,%a0@
-    addl   #4,%a0
+    movel  %a1,%a0@+              // store it in the L1 table and advance
     addl   #L2_PGTABLE_ENTRIES * 4,%a1 // advance to next L1 table
     subl   #1,%d0
     bne    .Ll1_loop
@@ -105,8 +122,7 @@ init_mmu_68040:
     movl   #L2_ENTRIES,%d0
     movl   #0x000000083,%d1       // address 0, supervisor, writable, present
 .L2_loop:
-    movl   %d1,%a0@               // read the current entry
-    addl   #4,%a0                 // advance to next L2 entry
+    movel  %d1,%a0@+              // store it in the L2 table and advance
     addl   #PAGE_SIZE,%d1         // advance to next page
     subl   #1,%d0
     bne    .L2_loop
