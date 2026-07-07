@@ -714,11 +714,8 @@ static status_t command_loop(console_t *con, int (*get_line)(const char **, void
     return NO_ERROR;
 
 no_mem_error:
-    if (outbuf)
-        free(outbuf);
-
-    if (args)
-        free(args);
+    free(outbuf);
+    free(args);
 
     dprintf(INFO, "%s: not enough memory\n", __func__);
     return ERR_NO_MEMORY;

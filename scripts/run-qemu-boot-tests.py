@@ -47,7 +47,7 @@ class QEMUTestRunner:
             }
         }
 
-    def run_qemu_test(self, arch, arch_config, quiet=False, log_dir=None):
+    def run_qemu_test(self, arch, arch_config, quiet=False, log_dir=None, disk_images=None, append_cmdline=None):
         """Run QEMU for the specified architecture and monitor for test completion"""
         print(f"\nRunning QEMU test for {arch}...")
 
@@ -60,6 +60,11 @@ class QEMUTestRunner:
         qemu_cmdline = [str(script_path)]
         if arch_config['args']:
             qemu_cmdline.append(str(arch_config['args']))
+        qemu_cmdline.extend(['-A', 'lk.unittests_at_boot=1'])
+        for cmdline in (append_cmdline or []):
+            qemu_cmdline.extend(['-A', str(cmdline)])
+        for disk in (disk_images or []):
+            qemu_cmdline.extend(['-d', str(disk)])
 
         if not quiet:
             print(f"Executing command: {' '.join(qemu_cmdline)}")
@@ -74,7 +79,7 @@ class QEMUTestRunner:
                 text=True,
                 bufsize=1,
                 universal_newlines=True,
-                env={**os.environ, 'LK_ROOT': str(self.lk_root), 'RUN_UNITTESTS_AT_BOOT': '1'},
+                env={**os.environ, 'LK_ROOT': str(self.lk_root)},
             )
 
             stdout = process.stdout
@@ -202,7 +207,7 @@ class QEMUTestRunner:
             sys.stdout.flush()
             return False
 
-    def run_all_tests(self, selected_archs=None, quiet=False, log_dir=None):
+    def run_all_tests(self, selected_archs=None, quiet=False, log_dir=None, disk_images=None, append_cmdline=None):
         """Run tests for all or selected architectures"""
         if selected_archs is None:
             selected_archs = list(self.architectures.keys())
@@ -217,7 +222,7 @@ class QEMUTestRunner:
             arch_config = self.architectures[arch]
 
             # Run the test
-            results[arch] = self.run_qemu_test(arch, arch_config, quiet, log_dir)
+            results[arch] = self.run_qemu_test(arch, arch_config, quiet, log_dir, disk_images, append_cmdline)
 
         return results
 
@@ -276,6 +281,10 @@ def main():
                        help='Run tests in quiet mode (suppress output)')
     parser.add_argument('--log-dir', default=None,
                        help='Directory to write per-architecture logs (optional)')
+    parser.add_argument('--append-cmdline', '-A', dest='append_cmdline', action='append', metavar='CMDLINE',
+                       help='Command line to append via the QEMU wrapper (can be specified multiple times)')
+    parser.add_argument('--disk', '-d', dest='disk_images', action='append', metavar='IMAGE',
+                       help='Disk image to pass to QEMU via -d (can be specified multiple times)')
 
     args = parser.parse_args()
 
@@ -288,7 +297,7 @@ def main():
     runner = QEMUTestRunner(lk_root)
 
     # Run tests
-    results = runner.run_all_tests(args.arch, args.quiet, args.log_dir)
+    results = runner.run_all_tests(args.arch, args.quiet, args.log_dir, args.disk_images, args.append_cmdline)
 
     # Print summary and return appropriate exit code
     return runner.print_summary(results, args.log_dir)

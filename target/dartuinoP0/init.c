@@ -121,20 +121,11 @@ void target_init(void) {
     uint8_t mac_addr[6];
     gen_random_mac_address(mac_addr);
     eth_init(mac_addr, PHY_KSZ8721);
-
-    /* start minip */
-    minip_set_eth(stm32_eth_send_minip_pkt, NULL, mac_addr);
-
-    uint32_t ip_addr = IPV4(192, 168, 0, 98);
-    uint32_t ip_mask = IPV4(255, 255, 255, 0);
-    uint32_t ip_gateway = IPV4_NONE;
-
-    minip_start_static(ip_addr, ip_mask, ip_gateway);
 #endif
 
 #if WITH_LIB_FS_SPIFS
     status_t mount_success = fs_mount(DEAULT_SPIFS_MOUNT_POINT,
-                                      DEAULT_SPIFS_NAME, SPIFS_TARGET_DEVICE);
+                                      DEAULT_SPIFS_NAME, SPIFS_TARGET_DEVICE, FS_MOUNT_OPTION_NONE);
     if (mount_success != NO_ERROR) {
         printf("************************************************************\n");
         printf("failed to mount '%s' at path '%s' on '%s'.\n"

@@ -6,7 +6,6 @@
  * https://opensource.org/licenses/MIT
  */
 #include <dev/virtio.h>
-#include <dev/virtio/net.h>
 #include <kernel/thread.h>
 #include <lk/err.h>
 #include <lk/reg.h>
@@ -17,8 +16,9 @@
 #include <platform/timer.h>
 #include <platform/virt.h>
 #include <sys/types.h>
-#if WITH_LIB_MINIP
-#include <lib/minip.h>
+#include <string.h>
+#if WITH_LIB_CMDLINE
+#include <lib/cmdline.h>
 #endif
 #if WITH_KERNEL_VM
 #include <kernel/vm.h>
@@ -70,6 +70,18 @@ void platform_early_init(void) {
     // Dump the bootinfo structure
     if (LK_DEBUGLEVEL >= INFO) {
         dump_all_bootinfo_records();
+    }
+
+    // look for command line in bootinfo records
+    uint16_t cmdline_size;
+    const char *cmdline = (const char *)bootinfo_find_record(BOOTINFO_TAG_COMMAND_LINE, &cmdline_size);
+    if (cmdline && cmdline_size > 0) {
+        dprintf(SPEW, "VIRT: bootinfo command line = \"%s\" (size %hu)\n", cmdline, cmdline_size);
+        // command line seems to always be zero terminated
+        status_t err = cmdline_init(cmdline, strlen(cmdline));
+        if (err != NO_ERROR && err != ERR_ALREADY_STARTED) {
+            dprintf(INFO, "VIRT: failed to initialize cmdline: %d\n", err);
+        }
     }
 
     // look for tag 0x5, which describes the memory layout of the system
@@ -133,27 +145,6 @@ void platform_init(void) {
 
     virtio_mmio_detect((void *)virtio_base, NUM_VIRT_VIRTIO, virtio_irqs, 0x200);
 
-#if WITH_LIB_MINIP
-    if (virtio_net_found() > 0) {
-        uint8_t mac_addr[6];
-
-        virtio_net_get_mac_addr(mac_addr);
-
-        TRACEF("found virtio networking interface\n");
-
-        /* start minip */
-        minip_set_eth(virtio_net_send_minip_pkt, NULL, mac_addr);
-
-        __UNUSED uint32_t ip_addr = IPV4(192, 168, 0, 99);
-        __UNUSED uint32_t ip_mask = IPV4(255, 255, 255, 0);
-        __UNUSED uint32_t ip_gateway = IPV4_NONE;
-
-        virtio_net_start();
-
-        // minip_start_static(ip_addr, ip_mask, ip_gateway);
-        minip_start_dhcp();
-    }
-#endif
 }
 
 static void virt_ctrl_system_reset(void) {

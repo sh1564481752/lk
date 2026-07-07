@@ -20,6 +20,7 @@
 #include <lib/pktbuf.h>
 #include <lib/pool.h>
 #include <lk/init.h>
+#include <lk/pow2.h>
 
 #if WITH_KERNEL_VM
 #include <kernel/vm.h>
@@ -30,6 +31,31 @@
 static pool_t pktbuf_pool;
 static semaphore_t pktbuf_sem;
 static spin_lock_t lock;
+
+size_t pktbuf_recommended_eth_rx_depth(size_t requested_depth) {
+    const size_t objects_per_rx = 2;
+
+    if (requested_depth == 0) {
+        return 0;
+    }
+
+    size_t available_objects = PKTBUF_POOL_SIZE;
+    if (available_objects > PKTBUF_ETH_RX_POOL_RESERVE_OBJECTS) {
+        available_objects -= PKTBUF_ETH_RX_POOL_RESERVE_OBJECTS;
+    } else {
+        available_objects = 0;
+    }
+
+    size_t max_depth = available_objects / objects_per_rx;
+    if (max_depth == 0) {
+        max_depth = 1;
+    }
+
+    size_t depth = (requested_depth < max_depth) ? requested_depth : max_depth;
+    size_t pow2_depth = valpow2(log2_uint((uint)depth));
+
+    return (pow2_depth != 0) ? pow2_depth : 1;
+}
 
 /* Take an object from the pool of pktbuf objects to act as a header or buffer.  */
 static void *get_pool_object(void) {
@@ -133,7 +159,7 @@ int pktbuf_free(pktbuf_t *p, bool reschedule) {
     if (p->cb) {
         p->cb(p->buffer, p->cb_args);
     }
-    free_pool_object((pktbuf_pool_object_t *)p, false);
+    free_pool_object((pktbuf_pool_object_t *)p, reschedule);
 
     return 1;
 }
@@ -192,24 +218,22 @@ void pktbuf_consume_tail(pktbuf_t *p, size_t sz) {
 }
 
 void pktbuf_dump(pktbuf_t *p) {
-    printf("pktbuf data %p, buffer %p, dlen %u, data offset %lu, phys_base %p\n",
-           p->data, p->buffer, p->dlen, (uintptr_t)p->data - (uintptr_t)p->buffer,
-           (void *)p->phys_base);
+    printf("pktbuf data %p, buffer %p, dlen %u, data offset %lu, phys_base %p\n", p->data,
+           p->buffer, p->dlen, (uintptr_t)p->data - (uintptr_t)p->buffer, (void *)p->phys_base);
 }
 
 static void pktbuf_init(uint level) {
     void *slab;
 
 #if LK_DEBUGLEVEL > 0
-    printf("pktbuf: creating %u pktbuf entries of size %zu (total %zu)\n",
-           PKTBUF_POOL_SIZE, sizeof(struct pktbuf_pool_object),
-           PKTBUF_POOL_SIZE * sizeof(struct pktbuf_pool_object));
+    printf("pktbuf: creating %u pktbuf entries of size %zu (total %zu)\n", PKTBUF_POOL_SIZE,
+           sizeof(struct pktbuf_pool_object), PKTBUF_POOL_SIZE * sizeof(struct pktbuf_pool_object));
 #endif
 
 #if WITH_KERNEL_VM
     if (vmm_alloc_contiguous(vmm_get_kernel_aspace(), "pktbuf",
-                             PKTBUF_POOL_SIZE * sizeof(struct pktbuf_pool_object),
-                             &slab, 0, 0, ARCH_MMU_FLAG_CACHED) < 0) {
+                             PKTBUF_POOL_SIZE * sizeof(struct pktbuf_pool_object), &slab, 0, 0,
+                             ARCH_MMU_FLAG_CACHED) < 0) {
         printf("Failed to initialize pktbuf hdr slab\n");
         return;
     }

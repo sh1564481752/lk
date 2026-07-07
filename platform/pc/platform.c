@@ -18,10 +18,12 @@
 #include <hw/multiboot.h>
 #include <inttypes.h>
 #include <kernel/vm.h>
+#include <lib/cmdline.h>
 #include <lk/err.h>
 #include <lk/init.h>
 #include <lk/trace.h>
 #include <malloc.h>
+#include <string.h>
 #include <platform.h>
 #include <platform/fb_console.h>
 #include <platform/keyboard.h>
@@ -67,6 +69,12 @@ extern uint64_t __bss_end;
 /* based on multiboot (or other methods) we support up to 16 arenas */
 #define NUM_ARENAS 16
 static pmm_arena_t mem_arena[NUM_ARENAS];
+
+/* A copy of the command line out of the multiboot info, which would otherwise be lost
+ * as the PMM and VM start to use memory.
+ * TODO: a better solution would be to find a way for the entire multiboot structure
+ * to be preserved. */
+static char cmdline_copy[256];
 
 /* parse an array of multiboot mmap entries */
 static status_t parse_multiboot_mmap(const memory_map_t *mmap, const size_t mmap_length,
@@ -132,13 +140,20 @@ static status_t parse_multiboot_mmap(const memory_map_t *mmap, const size_t mmap
  * of physical memory to bootstrap the pmm areas.
  * Returns number of arenas initialized in passed in pointer
  */
-static status_t platform_parse_multiboot_info(size_t *found_mem_arenas) {
+static status_t platform_parse_multiboot_info(size_t *found_mem_arenas,
+                                             bool *have_framebuffer_console) {
     *found_mem_arenas = 0;
+    *have_framebuffer_console = false;
 
     dprintf(SPEW, "PC: multiboot v2 address %#" PRIx32 "\n", _multiboot2_info);
     if (_multiboot2_info != 0) {
         struct multiboot2_info *multiboot_info =
-            (struct multiboot2_info *)((uintptr_t)_multiboot2_info + KERNEL_BASE);
+            paddr_to_kvaddr((paddr_t)_multiboot2_info);
+        if (!multiboot_info) {
+            dprintf(INFO, "PC: multiboot v2 info at %#" PRIx32 " is outside the early kernel mappings\n",
+                    _multiboot2_info);
+            return ERR_NOT_FOUND;
+        }
 
         dprintf(SPEW, "PC: multiboot info total size: %u\n", multiboot_info->total_size);
 
@@ -149,6 +164,14 @@ static status_t platform_parse_multiboot_info(size_t *found_mem_arenas) {
                 case MULTIBOOT2_TAG_TYPE_CMDLINE: {
                     char *cmdline = (char *)(tag + 1);
                     dprintf(SPEW, "PC: cmdline = \"%s\"\n", cmdline);
+
+                    // make a copy of the cmdline into a boot alloc block
+                    strlcpy(cmdline_copy, cmdline, sizeof(cmdline_copy));
+
+                    status_t err = cmdline_init(cmdline_copy, strlen(cmdline_copy));
+                    if (err != NO_ERROR && err != ERR_ALREADY_STARTED) {
+                        dprintf(INFO, "PC: failed to initialize cmdline: %d\n", err);
+                    }
                     break;
                 }
 
@@ -202,7 +225,18 @@ static status_t platform_parse_multiboot_info(size_t *found_mem_arenas) {
                     struct multiboot2_tag_framebuffer *framebuffer_tag =
                         (struct multiboot2_tag_framebuffer *)tag;
 
-                    fb_console_init(framebuffer_tag);
+                    if (framebuffer_tag->common.framebuffer_type == MULTIBOOT_FRAMEBUFFER_TYPE_RGB) {
+                        struct fb_console_boot_info fb_info = {
+                            .framebuffer_addr = framebuffer_tag->common.framebuffer_addr,
+                            .framebuffer_pitch = framebuffer_tag->common.framebuffer_pitch,
+                            .framebuffer_width = framebuffer_tag->common.framebuffer_width,
+                            .framebuffer_height = framebuffer_tag->common.framebuffer_height,
+                            .framebuffer_bpp = framebuffer_tag->common.framebuffer_bpp,
+                        };
+
+                        fb_console_init(&fb_info);
+                        *have_framebuffer_console = true;
+                    }
 
                     dprintf(SPEW, "PC: multiboot framebuffer info present:\n");
                     dprintf(SPEW, "\taddress %#" PRIx64 " pitch %u, width %u height %u bpp %hhu ",
@@ -263,9 +297,12 @@ static status_t platform_parse_multiboot_info(size_t *found_mem_arenas) {
         return ERR_NOT_FOUND;
     }
 
-    /* bump the multiboot pointer up to the kernel mapping */
-    /* TODO: test that it's within range of the kernel mapping */
-    const multiboot_info_t *multiboot_info = (void *)((uintptr_t)_multiboot1_info + KERNEL_BASE);
+    const multiboot_info_t *multiboot_info = paddr_to_kvaddr((paddr_t)_multiboot1_info);
+    if (!multiboot_info) {
+        dprintf(INFO, "PC: multiboot v1 info at %#" PRIx32 " is outside the early kernel mappings\n",
+                _multiboot1_info);
+        return ERR_NOT_FOUND;
+    }
 
     dprintf(SPEW, "\tflags %#x\n", multiboot_info->flags);
 
@@ -289,14 +326,49 @@ static status_t platform_parse_multiboot_info(size_t *found_mem_arenas) {
 
     // more modern multiboot mmap array
     if (multiboot_info->flags & MB_INFO_MMAP) {
-        const memory_map_t *mmap = (const memory_map_t *)(uintptr_t)multiboot_info->mmap_addr;
-        mmap = (void *)((uintptr_t)mmap + KERNEL_BASE);
+        const memory_map_t *mmap = paddr_to_kvaddr((paddr_t)multiboot_info->mmap_addr);
+        if (!mmap) {
+            dprintf(INFO, "PC: multiboot mmap at %#" PRIx32 " is outside the early kernel mappings\n",
+                    multiboot_info->mmap_addr);
+            return ERR_NOT_FOUND;
+        }
 
         dprintf(SPEW, "PC: multiboot memory map, length %u:\n", multiboot_info->mmap_length);
         parse_multiboot_mmap(mmap, multiboot_info->mmap_length, found_mem_arenas);
     }
 
+    // multiboot v1 command line
+    if (multiboot_info->flags & MB_INFO_CMD_LINE) {
+        const char *cmdline = paddr_to_kvaddr((paddr_t)multiboot_info->cmdline);
+        if (!cmdline) {
+            dprintf(INFO, "PC: multiboot cmdline at %#" PRIx32 " is outside the early kernel mappings\n",
+                    multiboot_info->cmdline);
+            return ERR_NOT_FOUND;
+        }
+        dprintf(SPEW, "PC: multiboot cmdline = \"%s\"\n", cmdline);
+
+        strlcpy(cmdline_copy, cmdline, sizeof(cmdline_copy));
+
+        status_t err = cmdline_init(cmdline_copy, strlen(cmdline_copy));
+        if (err != NO_ERROR && err != ERR_ALREADY_STARTED) {
+            dprintf(INFO, "PC: failed to initialize cmdline: %d\n", err);
+        }
+    }
+
     if (multiboot_info->flags & MB_INFO_FRAMEBUFFER) {
+        if (multiboot_info->framebuffer_type == MULTIBOOT_FRAMEBUFFER_TYPE_RGB) {
+            struct fb_console_boot_info fb_info = {
+                .framebuffer_addr = multiboot_info->framebuffer_addr,
+                .framebuffer_pitch = multiboot_info->framebuffer_pitch,
+                .framebuffer_width = multiboot_info->framebuffer_width,
+                .framebuffer_height = multiboot_info->framebuffer_height,
+                .framebuffer_bpp = multiboot_info->framebuffer_bpp,
+            };
+
+            fb_console_init(&fb_info);
+            *have_framebuffer_console = true;
+        }
+
         dprintf(SPEW, "PC: multiboot framebuffer info present\n");
         dprintf(SPEW, "\taddress %#" PRIx64 " pitch %u width %u height %u bpp %hhu type %u\n",
                 multiboot_info->framebuffer_addr, multiboot_info->framebuffer_pitch,
@@ -321,17 +393,22 @@ void platform_early_init(void) {
     /* get the debug output working */
     platform_init_debug_early();
 
-    /* get the text console working */
-    vga_console_init();
-
     /* initialize the interrupt controller */
     platform_init_interrupts();
 
-    /* look at multiboot to determine our memory size */
-    size_t found_arenas;
-    platform_parse_multiboot_info(&found_arenas);
-    if (found_arenas <= 0) {
-        /* if we couldn't find any memory, initialize a default arena */
+    /* parse the multiboot info to find memory and console information */
+    size_t found_arenas = 0;
+    bool have_framebuffer_console = false;
+    platform_parse_multiboot_info(&found_arenas, &have_framebuffer_console);
+
+    /* try to get the vga console working only if we don't have a framebuffer console */
+    if (!have_framebuffer_console) {
+        dprintf(INFO, "PC: using VGA console\n");
+        vga_console_init();
+    }
+
+    /* if we couldn't find any memory, initialize a default arena */
+    if (found_arenas == 0) {
         mem_arena[0] = (pmm_arena_t){ .name = "memory",
                                       .base = MEMBASE,
                                       .size = DEFAULT_MEMEND,
@@ -353,7 +430,9 @@ void platform_early_init(void) {
 }
 
 // Look for the ACPI tables just after the vm is initialized.
-void platform_init_postvm(uint level) {
+static void platform_init_postvm(uint level) {
+    fb_console_init_postvm();
+
 #if WITH_LIB_ACPI_LITE
     // Look for the root ACPI table
     status_t err = acpi_lite_init(0);
@@ -471,15 +550,3 @@ void platform_init(void) {
 
     platform_init_mmu_mappings();
 }
-
-#if WITH_LIB_MINIP
-void _start_minip(uint level) {
-    extern status_t e1000_register_with_minip(void);
-    status_t err = e1000_register_with_minip();
-    if (err == NO_ERROR) {
-        minip_start_dhcp();
-    }
-}
-
-LK_INIT_HOOK(start_minip, _start_minip, LK_INIT_LEVEL_APPS - 1);
-#endif

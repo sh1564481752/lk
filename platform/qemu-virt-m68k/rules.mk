@@ -10,9 +10,11 @@ endif
 LK_HEAP_IMPLEMENTATION ?= dlmalloc
 
 MODULE_DEPS += lib/cbuf
+MODULE_DEPS += lib/cmdline
 MODULE_DEPS += dev/virtio/block
 MODULE_DEPS += dev/virtio/gpu
 MODULE_DEPS += dev/virtio/net
+MODULE_DEPS += dev/virtio/rng
 
 MODULE_SRCS += $(LOCAL_DIR)/bootinfo.c
 MODULE_SRCS += $(LOCAL_DIR)/goldfish_rtc.c
